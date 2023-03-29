@@ -2,7 +2,7 @@
 
 ai_api is a simple framework for building your own ChatGPT plugins using your own APIs. Inspired by the python Flask framework, ai_api provides a simple way to register API functions with ChatGPT, using your existng documentation to train the AI on how to call your data. 
 
-## Example
+## Demo
 ```python
 from ai_api import AiApi
 
@@ -79,6 +79,9 @@ def my_api_function(arg1, arg2):
 ```python
 response = app.execute_query("What is the answer to my question?")
 ```
+
+## Examples
+There are 2 examples in the `/examples/` directory in this repo
 
 ## Testing
 
