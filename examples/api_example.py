@@ -1,47 +1,39 @@
-# import requests
-# from ai_api import AiApi
 
-# open_ai_key = os.environ.get('OPENAI_API_KEY')
-
-# app = AiApi(open_ai_key=open_ai_key)
-
-# import yfinance as yf
-# import pandas as pd
-
-# def calculate_5_day_rolling_EPS_average(ticker):
-#     stock = yf.Ticker(ticker)
-#     stock_info = stock.info
-    
-#     if 'earningsData' not in stock_info or 'quarterly' not in stock_info['earningsData']:
-#         print(f"No earnings data found for {ticker}")
-#         return None
-    
-#     earnings_data = stock_info['earningsData']['quarterly']
-#     eps_data = [{'Date': quarter['endDate'], 'EPS': quarter['earnings']} for quarter in earnings_data]
-    
-#     eps_df = pd.DataFrame(eps_data)
-#     eps_df['Date'] = pd.to_datetime(eps_df['Date'])
-#     eps_df.set_index('Date', inplace=True)
-#     eps_df.sort_index(ascending=True, inplace=True)
-    
-#     eps_df['5_day_rolling_EPS_average'] = eps_df['EPS'].rolling(window=5).mean()
-    
-#     return eps_df
-
-# # Example usage:
-# ticker = 'AAPL'
-# result = calculate_5_day_rolling_EPS_average(ticker)
-# print(result)
+import requests
 
 from sec_api import QueryApi
-import requests
-import json
-import os
 
 
-def fetch_sec_filings(ticker, form_type):
+# Import local version of ai_api for examples
+import pathlib, os, sys
+sys.path.append(os.path.join(pathlib.Path(__file__).parent.parent.resolve(), "src"))
+from ai_api import AiApi
+
+# Configure the API App
+open_ai_key = os.environ.get('OPENAI_API_KEY')
+app = AiApi(openai_api_key=open_ai_key, LOG_LEVEL="DEBUG")
+
+@app.register_api()
+def fetch_sec_filings(ticker: str, form_type: str) -> str:
     '''
-     Fetches the most recent SEF filing for a given ticker and form type and retuns the filing text
+     Fetches the most recent SEF filing for a company and form type.
+
+    Args:
+        ticker (str): The stock symbol (eg. AAPL, IBM, GM)
+        form_type (str): Filing type (eg. 4, 10-K, 10-Q)
+
+    Returns:
+        String: The exact filing text submitted to the SEC
+
+        example:
+        "SEC-Document-Text: 0001193125-20-001385.txt This transaction wqs made pursuant to the provisions"
+    
+    Code Example:
+
+        ticker = "AAPL"
+        form_type = "4"
+
+        form_text = fetch_sec_filings(ticker, form_type)    
     '''
 
     api_key = os.getenv("SEC_API_KEY")  # Replace with your own API key
@@ -62,16 +54,10 @@ def fetch_sec_filings(ticker, form_type):
         'User-Agent': 'Hedgineer Services LLC info@hedgineer.io'
     }
     filings = query_api.get_filings(query)
-    filing_text = []
-    for filing in filings['filings']:
-        r = requests.get(filing['linkToTxt'], headers=headers)
-        filing_text.append(r.text)
-    
-    return filing_text
+    if filing := filings['filings']:
+        r = requests.get(filing[0]['linkToTxt'], headers=headers)
+        return r.text
+    else:
+        return None
 
-# Example usage:
-ticker = 'AAPL'
-form_type = '4'
-
-result = fetch_sec_filings(ticker, form_type)
-print(len(result[0]))
+print(app.execute_query("What was the most recent insider transaction for GM"))
