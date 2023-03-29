@@ -96,9 +96,10 @@ pytest
 
 ## Contributing
 
-If you find a bug or have a feature request, please open an issue on GitHub. If you would like to contribute to the project, please fork the repository, make your changes, and submit a pull request.
+If you find a bug or have a feature request, please open an issue on GitHub. If you would like to contribute to the project, please fork the repository, make your changes, and submit a pull request. Please make sure all tests are passing :)
 
 ## Helpful Links
 
+- [LangChain](https://github.com/hwchase17/langchain)
 - [Documentation](https://hedgineer.io/ai_api/)
 - [GitHub Repository](https://github.com/hedgineer/ai_api)
