@@ -7,4 +7,5 @@ dependencies:
   - pydantic=1.10.2
   - pytest=7.1.2
   - python=3.10.9
+  - loguru=0.5.3 
 
