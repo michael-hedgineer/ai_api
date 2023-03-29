@@ -42,6 +42,7 @@ As we have seen, good documentation is actually a great source of prompt enginee
 
 - [Installation](#installation)
 - [Usage](#usage)
+- [More examples](#examples)
 - [Testing](#testing)
 - [Contributing](#contributing)
 - [Helpful Links](#helpful-links)
@@ -81,7 +82,8 @@ response = app.execute_query("What is the answer to my question?")
 ```
 
 ## Examples
-There are 2 examples in the `/examples/` directory in this repo
+There are 2 examples in the [examples](examples/) directory in this repo. The first
+example lookus up SEC filings types and another where we generate a random number.
 
 ## Testing
 
