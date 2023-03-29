@@ -1,9 +1,12 @@
 import os
 import json
+import sys
 import openai
+from loguru import logger
 
 from typing import Callable, Any
 from pydantic import BaseModel
+
 
 
 class ApiSpec(BaseModel):
@@ -76,39 +79,42 @@ class ApiSpec(BaseModel):
     
 class AiApi():
 
-    def __init__(self, model="gpt-3.5-turbo", open_api_key="", api_temperature=0, answer_temperature=.3):
+    def __init__(self, model="gpt-3.5-turbo", openai_api_key="", api_temperature=0, answer_temperature=.3, LOG_LEVEL="INFO"):
 
-        if not open_api_key:
-            open_api_key = os.environ.get('OPENAI_API_KEY')
+        logger.add(sys.stderr, format="{time} {level} {message}", level=LOG_LEVEL, backtrace=True, diagnose=True)
         
-        openai.api_key = open_api_key
+        if not openai_api_key:
+            openai_api_key = os.environ.get('OPENAI_API_KEY')
         
+        openai.api_key = openai_api_key
+
         self.model = model
         self.api_temperature = api_temperature
         self.answer_temperature = answer_temperature
         self._apis = {}
 
         self._api_prompts = []
-        self.template_prompt_api_identify = 'Identify what APIs need to be called in this query: "{0}"'
+        self.template_prompt_api_identify = 'Identify what APIs with corresponding arguments need to be called to answer this query: "{0}"'
 
         pass
 
 
-    def register_api(self, name:str, *args, **kwargs):
+    def register_api(self, use_doc_str:bool=True, **kwargs):
         """
         Register Function for being accessble to the the LLL Model
 
         Args:
             name (str): The unique name for the function
-            use_doc_str (bool): Use the docstring of the function
+            use_doc_str (bool): Use the docstring of the function for the AI Documentation
 
-            One of below for the spec:
+            Optional additioonal arguments for the ApiSpecifictions:
             api_dict (dict): Dictionary for the JSON Spec
             api_spec (ai_api.ApiSpec): The ApiSpec object
             json_spec (str): Location of the JSON spec for the API
             yaml_spec (str): Location of the yaml spec for the API
         """
         
+        spec = None
         if api_dict := kwargs.get('api_dict'):
             ApiSpec.verify_dict(api_dict)
             spec = ApiSpec(**api_dict)
@@ -117,26 +123,22 @@ class AiApi():
                 "api_spec value must be an ApiSpec instance when registering API."
             ApiSpec.verify_dict(dict(api_spec))
             spec = api_spec
-        else:
-            raise NotImplementedError('Only the api_spec or api_dict argument is implemented')
-
-        assert name == spec.name, 'The name of the registered function and the spec do not match'
-        
+       
         def registered_function(func):
 
             def wrapped_func(*args, **kwargs):
                 
                 return func(*args, **kwargs)
             
-            api = Api(function=wrapped_func, spec=spec)
-            self._apis[name.lower()] = api
+            api = Api(function=func, spec=spec, use_doc_str=use_doc_str)
+            self._apis[func.__name__] = api
 
             return wrapped_func
         
         return registered_function
         
     def _set_apis_prompt(self) -> str :
-        """Generates a list of prompts that guide the API to identify the APIs to be called.
+        """Generates a list of prompts that guide the AI to identify the APIs to be called.
 
         The method sets self.api_prompts based on a a system prompt and an example prompt that 
         provides instructions to the LLM for identifying APIs and their arguments. Included in this is documenation 
@@ -155,13 +157,20 @@ class AiApi():
 
         prompts = []
         system_prompt = f"""
-        You are the first stage in a framework that helps users interact with generative AI.
-        Your job is to identify what APIs need to be called in order to help a second AI assistant answer a user request.
-        You only reply in JSON format.
-        You must identify what APIs need to be called AND what their arguments are.
+        Your job is to identify APIs that need to be called to answer a user query.
+        You MUST ONLY reply in JSON format. DO not include additional text in your reply.
+        You will be given a list of APIs to choose from any you must identify what APIs you need to call and what arguments to pass to them.
+        You ONLY reply with JSON formatted text that includes the API name and the kwargs to pass to it. Below is an example:
 
-        There are {len(self._apis)} APIs to choose from that are listed below:
+        Example:
+        {{
+            "apis": [
+                {{"name": "api_name", "kwargs": {{"arg1": "value1", "arg2": "value2"}}
+            ],
+            "notes": "Additional notes go here if needed"
+        }}
 
+        List of APIs:
         {api_list}
 
         Documentation for each API are as follows:
@@ -169,28 +178,7 @@ class AiApi():
         {api_documentation}
         """.replace('        ', '')
 
-        prompts.append({'role': 'system', 'content': system_prompt})
-
-        # Add in all of the examples for N-Shot tests
-        for name, api in self._apis.items():
-            for i_example in range(len(api.spec.example_results)):
-                prompts.append({
-                    'role': 'user',
-                    'content': self.template_prompt_api_identify.format(
-                        api.formatted_spec['example_results']
-                    )
-                })
-                prompts.append({
-                    'role': 'assistant',
-                    'content': json.dumps(
-                        {"apis": [
-                            {
-                                'name': api.spec.name,
-                                'kwargs': api.spec.example_kwargs
-                            }
-                        ]}
-                    )
-                })   
+        prompts.append({'role': 'system', 'content': system_prompt})  
                 
         self._api_prompts = prompts
 
@@ -210,39 +198,16 @@ class AiApi():
 
         prompts = []
         system_prompt = f"""
-        You are the last step in a framework that helps users interact with generative AI.
-        Before you recieved each user request, another AI identified which APIs needed to be called to answer this request and added the resuls to this response.
-        The user request is listed below along with the results of the API calls.
+        You are an assistant that answers a user query using supplemenal API informatin.
+        Results include the api used, the arguments passed to it, and the results of the call.
+        Answer the question as best you can with this information.
+        DO NOT reference the APIs that were used in the response.
 
-        Your job is to:
-        1. Understand the user query
-        2. Understand the API results that were made and why
-        3. Answer with the best response to the user query by using the api results as though you are a research assistant
-
-        Below is the list of the {len(apis_used)} API calls that are used:
-
+        Below is a description of the APIs used and how to interpret their results:
         {api_documentation}
-
         """.replace('        ', '')
 
         prompts.append({'role': 'system', 'content': system_prompt})
-
-        for name in apis_used:
-            api = self._apis[name]
-            for i_example in range(len(api.spec.example_results)):
-                example_dict = {
-                    "user_request": api.spec.example_query[i_example],
-                    "apis": [
-                        {   
-                            "name": name,
-                            "kwargs": api.spec.example_kwargs[i_example],
-                            "result": api.spec.example_results[i_example]
-                        }
-                    ]
-                }
-
-                prompts.append({'role': 'user', 'content': json.dumps(example_dict, indent=4)})
-                prompts.append({'role': 'assistant', 'content': self._apis[name].spec.example_response[0]})
             
         return prompts
     
@@ -267,6 +232,9 @@ class AiApi():
             }
         ]
         
+        for i in (self._api_prompts + query_prompt):
+            logger.debug(i['content'])
+
         api_response = openai.ChatCompletion.create(
             model=self.model,
             messages=(self._api_prompts + query_prompt),
@@ -276,20 +244,20 @@ class AiApi():
         api_json_text = api_response.choices[0]['message']['content']
         
         try:
+            logger.debug(api_json_text)
             api_calls = json.loads(api_json_text)
         except json.decoder.JSONDecodeError:
-            print(api_json_text)
+            logger.exception("Error decoding JSON")
             raise
 
         return api_calls
     
 
-    def answer_query(self, query: str, api_results: dict) -> str:
+    def answer_query(self, api_results: dict) -> str:
         '''
         Answers the query based on the APIs that were called
 
         Args:
-            query (str): The query to be answered
             api_calls (dict): The APIs that need to be called and their arguments
 
         Returns:
@@ -301,19 +269,23 @@ class AiApi():
 
         answer_prompt = [{
             'role': 'user',
-            'content': {
-                "user_request": query,
-                "apis": api_results
-            }
+            'content': json.dumps(api_results)
         }]
         
-        answer_response = openai.ChatCompletion.create(
-            model=self.model,
-            messages=(answer_prompts + answer_prompt),
-            temperature=self.answer_temperature
-        )
+        for i in (answer_prompts + answer_prompt):
+            logger.debug(i['content'])
+        
+        try:
+            answer_response = openai.ChatCompletion.create(
+                model=self.model,
+                messages=(answer_prompts + answer_prompt),
+                temperature=self.answer_temperature
+            )
 
-        answer_text = answer_response.choices[0]['message']['content']
+            answer_text = answer_response.choices[0]['message']['content']
+        except Exception:
+            logger.exception("Error answering query")
+            raise
 
         return answer_text
 
@@ -355,8 +327,10 @@ class AiApi():
                 'kwargs': api_dict['kwargs'],
                 'result': result
             })
+        
+        query_and_api_results = {'user_request': query, 'apis': api_results}
 
-        answer = self.answer_query(query, {'user_request': query, 'apis': api_results})
+        answer = self.answer_query(query_and_api_results)
         return answer
  
                 
@@ -369,123 +343,24 @@ class Api():
     name: str
     function: Callable
     spec: ApiSpec
-    formatted_spec: dict
     formatted_spec_doc: str
 
-    def __init__(self, function: Callable, spec: ApiSpec):
+    def __init__(self, function: Callable, use_doc_str: bool, spec: ApiSpec):
         self.spec = spec
-        self.name = spec.name 
+        self.name = function.__name__
         self.function = function
-        self.formatted_spec = self._create_formatted_spec(spec)
-        self.formatted_documentation = self._create_api_documentation(self.formatted_spec)
+        self.formatted_documentation = self._create_api_documentation(self.spec)
 
-
-    def _create_formatted_spec(self, spec) -> dict:
-        '''
-        Formats all of the values in the spec so they can be referenced in the 
-        ai prompts
-        '''
-
-        formatted_spec = {}
-        # The formatting function for any special string formatting for arguments
-        format_dict = {
-            'args': self._format_args,
-            'example_results': self._format_examples,
-            'example_query': self._format_examples,
-            'example_response': self._format_examples,
-            'example_kwargs': lambda x: x
-        }
-
-        for k, v in dict(spec).items():
-            format_func = format_dict.get(k, self._format_default)
-            formatted_spec[k] = format_func(v)
-        
-        return formatted_spec
-
-    def _format_default(self, value):
-        '''
-        The default value formatter for a spec value
-        '''
-
-        if not isinstance(value, str):
-            return str(value).strip()
-        
-        return value.strip()
-
-    def _format_args(self, args: list) -> str:
-        '''
-        Formats the function arguments as a string for the AI using standard arg doc structure
-
-        Args:
-            args (list): A list of tuples including the arg name, type, description, and python example struct
-        
-        Returns:
-            a formatted string of the argument to inject into prompts such as the Args section of this docstring
-        '''
-
-        if not(args) or type(args[0]) == str: 
-            return '\n'.join(a.strip() for a in args)
-        
-        formattted_arg_lst = []
-        arg_template = "{name} ({arg_type}): {desc}"
-
-        for name, arg_type, desc in args:
-            if not isinstance(arg_type, str):
-                arg_type = str(arg_type)
-            formattted_arg_lst.appped(arg_template.format(
-                name=name.strip(), arg_type=arg_type.strip(), desc=desc.strip()
-            ))
-
-        return "\n".join(formattted_arg_lst)
-    
-    def _format_examples(self, example):
-
-        example_lst = []
-        for i in example:
-            if not isinstance(i, str):
-                example_lst.append(str(i).strip())
-            else:
-                example_lst.append(i.strip())
-        
-        return example_lst
-
-    def _create_api_documentation(self, spec: dict) -> str:
+    def _create_api_documentation(self, spec: dict, use_doc_str=True) -> str:
         '''
         Create the documentation string for each API from the spec given. This is then
         injected into the api and answer prompts to inform the AI how to use the API
         '''
 
-        # Use this section to format the values
-        formatted_spec = {}
-        for k, v in spec.items():
-            formatted_spec[k] = v
-
-        template = '''
-        Name:
-        {name}
-
-        Description:
-        {description}
-
-        Args:
-        {args}
-
-        Code Example:
-        {code_example}
-
-        Results Example:
-        {example_results[0]}
-
-        Results Description:
-        {results_description}
-
-        Example Query:
-        {example_query[0]}
-
-        Example Response:
-        {example_response[0]}
-        '''.format(
-            **formatted_spec
-        )
+        template = f'''
+        Python Function Name: {self.function.__name__}
+        Python Documentation:
+        {self.function.__doc__}
+        '''
 
         return template
